@@ -31,9 +31,8 @@ model=
 root=
 status=
 command=
-context_pct=
-context_tokens=
-context_window=
+transcript_path=
+duration_ms=
 
 if command -v jq >/dev/null 2>&1; then
   event=$(printf '%s' "$payload" | jq -r '.hook_event_name // ""' 2>/dev/null) || event=
@@ -43,9 +42,8 @@ if command -v jq >/dev/null 2>&1; then
   root=$(printf '%s' "$payload" | jq -r '.workspace_roots[0] // .cwd // ""' 2>/dev/null) || root=
   status=$(printf '%s' "$payload" | jq -r '.status // ""' 2>/dev/null) || status=
   command=$(printf '%s' "$payload" | jq -r '.command // ""' 2>/dev/null) || command=
-  context_pct=$(printf '%s' "$payload" | jq -r '.context_usage_percent // ""' 2>/dev/null) || context_pct=
-  context_tokens=$(printf '%s' "$payload" | jq -r '.context_tokens // ""' 2>/dev/null) || context_tokens=
-  context_window=$(printf '%s' "$payload" | jq -r '.context_window_size // ""' 2>/dev/null) || context_window=
+  transcript_path=$(printf '%s' "$payload" | jq -r '.transcript_path // ""' 2>/dev/null) || transcript_path=
+  duration_ms=$(printf '%s' "$payload" | jq -r '.duration_ms // empty' 2>/dev/null) || duration_ms=
 fi
 
 if [ -z "$event" ]; then
@@ -61,13 +59,13 @@ fi
 
 [ -n "$root" ] || root="$cwd"
 
-# ─── State capture (requires jq) ───────────────────────────────────────────────
+# ─── State capture (requires jq) ─────────────────────────────────────────────
 capture_state() {
   [ -n "$conversation_id" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
 
   state_file="$STATE_DIR/${conversation_id}.json"
-  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
 
   if [ -f "$state_file" ]; then
     existing=$(cat "$state_file" 2>/dev/null) || existing='{}'
@@ -81,19 +79,23 @@ capture_state() {
     --arg last_event "$event" \
     --arg updated_at "$now" \
     --arg conversation_id "$conversation_id" \
+    --arg transcript_path "$transcript_path" \
     '. + {
       model: (if $model != "" then $model else .model // "" end),
       root: (if $root != "" then $root else .root // "" end),
       last_event: $last_event,
       updated_at: $updated_at,
-      conversation_id: $conversation_id
+      conversation_id: $conversation_id,
+      transcript_path: (if $transcript_path != "" then $transcript_path else .transcript_path // "" end)
     }' 2>/dev/null) || merged=
 
   [ -n "$merged" ] || return 0
 
   case "$event" in
     sessionStart)
-      merged=$(printf '%s' "$merged" | jq '. + {status: "running", command_count: 0}' 2>/dev/null) || :
+      merged=$(printf '%s' "$merged" | jq \
+        --arg started_at "$now" \
+        '. + {status: "running", command_count: 0, started_at: $started_at}' 2>/dev/null) || :
       ;;
     afterShellExecution)
       merged=$(printf '%s' "$merged" | jq \
@@ -109,7 +111,8 @@ capture_state() {
         '.[0] + {
           context_pct: (.[1].context_usage_percent // .[0].context_pct // null),
           context_tokens: (.[1].context_tokens // .[0].context_tokens // null),
-          context_window: (.[1].context_window_size // .[0].context_window // null)
+          context_window: (.[1].context_window_size // .[0].context_window // null),
+          message_count: (.[1].message_count // .[0].message_count // null)
         }' 2>/dev/null) || :
       ;;
     stop)
@@ -118,7 +121,11 @@ capture_state() {
         '. + {status: (if $st != "" then $st else .status // "completed" end)}' 2>/dev/null) || :
       ;;
     sessionEnd)
-      merged=$(printf '%s' "$merged" | jq '. + {status: "ended"}' 2>/dev/null) || :
+      merged=$(printf '%s' "$merged" "$payload" | jq -s \
+        '.[0] + {
+          status: "ended",
+          duration_ms: (.[1].duration_ms // .[0].duration_ms // null)
+        }' 2>/dev/null) || :
       ;;
   esac
 
@@ -128,9 +135,20 @@ capture_state() {
 
 capture_state
 
-# ─── Title: project folder basename ──────────────────────────────────────────
+# ─── Title: session title → project folder basename ──────────────────────────
+session_title=
+if [ -n "$transcript_path" ] && [ -f "$transcript_path" ] && command -v jq >/dev/null 2>&1; then
+  title_line=$(grep -E '"title"|"customTitle"|"session_name"' "$transcript_path" 2>/dev/null | head -n 1)
+  if [ -n "$title_line" ]; then
+    session_title=$(printf '%s' "$title_line" | jq -r '
+      .title // .customTitle // .session_name // ""' 2>/dev/null)
+  fi
+fi
+
 if [ -n "${CURSOR_PULSE_NOTIFY_TITLE:-}" ]; then
   title="$CURSOR_PULSE_NOTIFY_TITLE"
+elif [ -n "$session_title" ]; then
+  title="$session_title"
 elif [ -n "$root" ]; then
   title=$(basename -- "$root")
 elif [ -n "$cwd" ]; then
@@ -174,14 +192,55 @@ esac
 
 [ "$notify" = "1" ] || exit 0
 
-# ─── Notifier backends (stdout must stay clean) ──────────────────────────────
+# ─── Skip when this exact terminal tab is focused (macOS) ────────────────────
+# Per-tab precision on Terminal.app / iTerm2. Fail open: any uncertainty → notify.
+if [ "${CURSOR_PULSE_NOTIFY_SKIP_FOCUSED:-1}" != "0" ] \
+  && [ "$(uname -s 2>/dev/null)" = "Darwin" ] \
+  && command -v lsappinfo >/dev/null 2>&1; then
+  host_app=""; my_tty=""
+  pid=$$; n=0
+  while [ "$n" -lt 20 ]; do
+    exe=$(ps -o comm= -p "$pid" 2>/dev/null)
+    case "$exe" in */*.app/Contents/MacOS/*) host_app="${exe%/Contents/MacOS/*}" ;; esac
+    tt=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+    case "$tt" in ttys*) [ -z "$my_tty" ] && my_tty="$tt" ;; esac
+    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    { [ -z "$ppid" ] || [ "$ppid" -le 1 ]; } && break
+    pid=$ppid; n=$(( n + 1 ))
+  done
+
+  host_bid=""
+  [ -n "$host_app" ] && [ -f "$host_app/Contents/Info.plist" ] \
+    && host_bid=$(defaults read "$host_app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null)
+  front_bid=$(lsappinfo info -only bundleID "$(lsappinfo front 2>/dev/null)" 2>/dev/null \
+    | sed 's/.*"\(.*\)".*/\1/' | grep -v '^$' | tail -1)
+
+  if [ -n "$host_bid" ] && [ "$host_bid" = "$front_bid" ]; then
+    front_tty=""
+    case "$host_bid" in
+      com.apple.Terminal)
+        front_tty=$(osascript -e 'tell application "Terminal" to get tty of selected tab of front window' 2>/dev/null) ;;
+      com.googlecode.iterm2)
+        front_tty=$(osascript -e 'tell application "iTerm2" to tell current session of current window to get tty' 2>/dev/null) ;;
+    esac
+    if [ -n "$front_tty" ] && [ -n "$my_tty" ]; then
+      [ "$front_tty" = "/dev/$my_tty" ] && exit 0
+    else
+      exit 0
+    fi
+  fi
+fi
+
+# ─── Notifier backends (stdout must stay clean; run synchronously, no &) ───────
 TTY_OUT="/dev/tty"
 [ -w "$TTY_OUT" ] 2>/dev/null || TTY_OUT="/dev/null"
 
 notify_icon() {
+  # PNG only for notify-send — never pass .icns to terminal-notifier (-appIcon).
   if [ -n "${CURSOR_PULSE_NOTIFY_ICON:-}" ] && [ -f "$CURSOR_PULSE_NOTIFY_ICON" ]; then
-    printf '%s' "$CURSOR_PULSE_NOTIFY_ICON"
-    return 0
+    case "$CURSOR_PULSE_NOTIFY_ICON" in
+      *.png|*.PNG) printf '%s' "$CURSOR_PULSE_NOTIFY_ICON"; return 0 ;;
+    esac
   fi
   return 1
 }
@@ -195,18 +254,15 @@ notify_terminal_notifier() {
   else
     return 1
   fi
-  set -- -title "$title" -message "$message"
-  if [ "$tn" = "terminal-notifier" ]; then
-    icon=$(notify_icon || printf '')
-    [ -n "$icon" ] && set -- "$@" -appIcon "$icon"
-  fi
-  "$tn" "$@" >/dev/null 2>&1
+  # Bare title + message only — no -group, no -appIcon, no -sender.
+  "$tn" -title "$title" -message "$message" >/dev/null 2>&1
   return 0
 }
 
 notify_alerter() {
   command -v alerter >/dev/null 2>&1 || return 1
-  alerter -title "$title" -message "$message" -group "cursor-pulse" >/dev/null 2>&1
+  # alerter blocks; background is the one acceptable exception.
+  alerter -title "$title" -message "$message" >/dev/null 2>&1 &
   return 0
 }
 

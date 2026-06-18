@@ -75,13 +75,19 @@ if [ ! -f "$CONFIG_DST" ]; then
 # cursor-pulse config — edit to taste. Sourced by the scripts; survives updates.
 # Uncomment a line to enable it.
 
-# Nerd Font glyphs in the status line (needs a Nerd Font in your terminal):
-# CURSOR_PULSE_NERD=1
+# Icon modes (mutually exclusive — default is plain text, no icons):
+# CURSOR_PULSE_NERD=1      # Nerd Font glyphs (needs a Nerd Font installed)
+# CURSOR_PULSE_EMOJI=1     # emoji icons (any terminal)
+# CURSOR_PULSE_SYMBOLS=1   # plain Unicode symbols (✦ ▸ ⎇ ▦ ⚙ ◷)
 
 # Context bar width, in cells:
 # CURSOR_PULSE_BAR_WIDTH=10
 
-# Hide status-line segments (comma list): model,dir,branch,context,activity
+# Show token counts after context % (1 = show, 0 = hide):
+# CURSOR_PULSE_TOKENS=1
+
+# Hide status-line segments (comma list):
+# mode,model,dir,branch,activity,context,duration,tools
 # CURSOR_PULSE_HIDE=
 
 # Notifications:
@@ -89,6 +95,7 @@ if [ ! -f "$CONFIG_DST" ]; then
 # CURSOR_PULSE_NOTIFY_ON_STOP=1
 # CURSOR_PULSE_NOTIFY_ON_SESSION_END=0
 # CURSOR_PULSE_NOTIFY_ON_SHELL=0
+# CURSOR_PULSE_NOTIFY_SKIP_FOCUSED=1
 # CURSOR_PULSE_NOTIFY_TITLE=
 # CURSOR_PULSE_NOTIFY_ICON=
 EOF
@@ -121,6 +128,7 @@ link_cli || CLI_LINK_NOTE="Could not link the CLI onto PATH; run it as $CLI_DST"
 NOTIFIER_APP="$INSTALL_DIR/CursorPulse.app"
 find_cursor_icns() {
   for cand in \
+    "/Applications/Cursor.app/Contents/Resources/Cursor.icns" \
     "/Applications/Cursor.app/Contents/Resources/"*.icns \
     "/Applications/Cursor.app/Contents/Resources/app.icns" \
     "/Applications/Cursor.app/Contents/Resources/electron.icns"; do

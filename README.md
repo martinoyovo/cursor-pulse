@@ -4,9 +4,10 @@ A tiny [Cursor CLI](https://cursor.com) (`cursor-agent`) companion that bundles 
 things in one repo:
 
 1. **An on-demand status line** — rendered by `cursor-pulse status` from session
-   state captured by hooks (see limitation below).
+   state captured by hooks, plus live reads of `cli-config.json` and agent
+   transcripts.
 2. **Desktop notifications** — fired via hooks when Cursor finishes a turn or
-   needs your attention.
+   needs your attention (with focus-aware skip on macOS).
 
 It's the Cursor CLI counterpart to
 [`claude-pulse`](https://github.com/martinoyovo/claude-pulse) and
@@ -17,40 +18,41 @@ segment). No frameworks.
 ## Important: no live in-TUI status line
 
 Unlike Claude Code, **Cursor's CLI has no customizable status-line slot** as of
-2026 — there is no composer-bar hook that pipes session JSON to a script on
-every render. cursor-pulse works around this by:
+2026. cursor-pulse works around this by:
 
-- **Hooks capture session state to disk** as they fire (`stop`, `sessionStart`,
-  `afterShellExecution`, `preCompact`, etc.).
-- **`cursor-pulse status` renders the line on demand** from that captured state.
+- **Hooks capture session state to disk** as they fire.
+- **`cursor-pulse status` renders the line on demand** from that state, enriched
+  by `~/.cursor/cli-config.json` (model name, approval mode) and agent
+  transcripts (turn/tool counts).
 
 Use it in your shell prompt, tmux status bar, or run it manually. Context usage
-(`context_pct`) only appears **after Cursor fires a `preCompact` hook** — there
-is no other source for context-window percentage in the Cursor CLI payload.
+only appears **after Cursor fires a `preCompact` hook** — transcripts on current
+cursor-agent builds do not carry token counts.
 
 ## Preview
 
 The status line is a single, color-coded line:
 
 ```
-composer-2 │ cursor-pulse │ main* │ ███░░ 64% │ idle (3 cmds)
+◆ ALLOWLIST │ Composer 2.5 Fast │ cursor-pulse │ main* │ idle (3 cmds, 2 turns, Shell×4) │ ▦███░░ 12% (120K/1.0M) │ ◷ 4m
 ```
 
-| Segment | Shows | Color |
+| Segment | Source | Shows |
 | --- | --- | --- |
-| `composer-2` | Model name | magenta |
-| `cursor-pulse` | Project directory (basename) | cyan |
-| `main*` | Git branch — `*` means dirty working tree | blue / yellow `*` |
-| `███░░ 64%` | Context-window usage (green → yellow → red) | by threshold |
-| `idle (3 cmds)` | Activity status + shell command count | green |
+| `◆ ALLOWLIST` | `cli-config.json` | MODE badge when noteworthy (`MAX`, non-automatic `approvalMode`) |
+| `Composer 2.5 Fast` | `cli-config.json` | Model display name |
+| `cursor-pulse` | captured state | Project directory (basename) |
+| `main*` | git | Branch — `*` means dirty working tree |
+| `idle (…)` | state + transcript | Activity status, command/turn counts, top tool |
+| `███░░ 12% (120K/1.0M)` | `preCompact` hook | Smooth context bar + token counts |
+| `◷ 4m` | `sessionEnd` / elapsed | Session duration |
 
 Notifications look like:
 
-- **cursor-pulse** (title = project folder) — **Cursor is waiting for your input**
-  when a turn ends (`stop`, status `completed`).
-- **Cursor stopped** / **Cursor hit an error** for aborted/error stops.
-- Optional: **Cursor session ended** (`sessionEnd`) or **ran: `<cmd>`**
-  (`afterShellExecution`).
+- **cursor-pulse** (title = project folder, or session title if found) —
+  **Cursor is waiting for your input** when a turn ends.
+- Skipped automatically when **this terminal tab** is focused (macOS;
+  Terminal.app / iTerm2).
 
 ## Install
 
@@ -66,20 +68,9 @@ Or one-shot:
 curl -fsSL https://raw.githubusercontent.com/martinoyovo/cursor-pulse/main/install.sh | sh
 ```
 
-The installer:
-
-- copies scripts to `~/.cursor/cursor-pulse/`, and
-- **merges** hook entries into `~/.cursor/hooks.json` without clobbering your
-  existing hooks. Re-running is idempotent.
-
-Hooks are registered only on **observe-only events** (`stop`, `sessionStart`,
-`sessionEnd`, `afterShellExecution`, `preCompact`) — never on permission-gating
-events like `beforeShellExecution`.
-
-Then start a **`cursor-agent` session** so hooks can capture state. The first
-time a hook runs, Cursor may ask you to trust it.
-
-The installer also adds a `cursor-pulse` command (symlinked onto your `PATH`):
+The installer copies scripts to `~/.cursor/cursor-pulse/`, merges hook entries
+into `~/.cursor/hooks.json` (observe-only events only), symlinks the CLI, and
+on macOS builds a Cursor-branded `CursorPulse.app` notifier.
 
 ```sh
 cursor-pulse status     # render the status line on demand
@@ -87,155 +78,85 @@ cursor-pulse test       # fire a test notification
 cursor-pulse doctor     # check install health
 cursor-pulse update     # re-install the latest version from GitHub
 cursor-pulse uninstall  # remove cursor-pulse
-cursor-pulse version
 ```
 
-### Updating
+**Shell prompt example:**
 
 ```sh
-cursor-pulse update
-```
-
-cursor-pulse doesn't auto-update — your installed copy is frozen at install
-time. `cursor-pulse update` re-fetches the latest from GitHub and reinstalls in
-place (idempotent; your config survives). If the command isn't on your
-`PATH`, re-run the `curl … | sh` one-liner.
-
-### Manual install
-
-Copy the scripts wherever you like and merge the block from
-[`hooks.example.json`](hooks.example.json) into `~/.cursor/hooks.json` (use
-**absolute paths** for the `command` field):
-
-```sh
-mkdir -p ~/.cursor/cursor-pulse
-cp statusline.sh hooks/notify.sh uninstall.sh cursor-pulse ~/.cursor/cursor-pulse/
-chmod +x ~/.cursor/cursor-pulse/*.sh ~/.cursor/cursor-pulse/cursor-pulse
+PS1='$(cursor-pulse status 2>/dev/null)\n'"$PS1"
 ```
 
 ## Configuration
 
-Set these as environment variables, or — easier — edit
-`~/.cursor/cursor-pulse/config.sh`, which the scripts source on every run and
-which **survives `cursor-pulse update`**. The installer drops a commented
-template there. Example:
+Edit `~/.cursor/cursor-pulse/config.sh` (created by the installer, never
+clobbered on update):
 
 ```sh
-# ~/.cursor/cursor-pulse/config.sh
-CURSOR_PULSE_NERD=1        # use Nerd Font icons
-CURSOR_PULSE_BAR_WIDTH=12  # a slightly longer bar
+# Icon modes (mutually exclusive — default is plain text):
+# CURSOR_PULSE_NERD=1      # Nerd Font (needs a Nerd Font in your terminal)
+# CURSOR_PULSE_EMOJI=1     # emoji (any terminal)
+# CURSOR_PULSE_SYMBOLS=1   # Unicode symbols: ✦ ▸ ⎇ ▦ ⚙ ◷
+
+CURSOR_PULSE_BAR_WIDTH=12
+CURSOR_PULSE_NOTIFY_SKIP_FOCUSED=1
 ```
 
-### Status line (`statusline.sh` / `cursor-pulse status`)
+### Status line
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `CURSOR_PULSE_NERD` | `0` | Set to `1` to use [Nerd Font](https://www.nerdfonts.com/) glyphs. Off uses plain text. |
-| `CURSOR_PULSE_BAR_WIDTH` | `10` | Width of the context bar, in cells. |
-| `CURSOR_PULSE_HIDE` | _(none)_ | Comma list of segments to hide: `model`, `dir`, `branch`, `context`, `activity`. |
-| `NO_COLOR` | _(unset)_ | Standard [`NO_COLOR`](https://no-color.org/) — disables all ANSI color. |
-| `CURSOR_CONFIG_DIR` | `~/.cursor` | Override Cursor's config directory. |
+| `CURSOR_PULSE_NERD` | `0` | Nerd Font glyphs (needs a Nerd Font or shows boxes). |
+| `CURSOR_PULSE_EMOJI` | `0` | Emoji icons — works on any terminal. |
+| `CURSOR_PULSE_SYMBOLS` | `0` | Plain Unicode symbols (no special font). |
+| `CURSOR_PULSE_BAR_WIDTH` | `10` | Context bar width in cells. |
+| `CURSOR_PULSE_TOKENS` | `1` | Show `(120K/1.0M)` token counts after context %. |
+| `CURSOR_PULSE_HIDE` | _(none)_ | Comma list: `mode`, `model`, `dir`, `branch`, `activity`, `context`, `duration`, `tools`. |
+| `NO_COLOR` | _(unset)_ | Disable ANSI colors. |
+| `CURSOR_CONFIG_DIR` | `~/.cursor` | Override Cursor config directory. |
 
-Context percentage comes from the `preCompact` hook payload (`context_usage_percent`).
-If no compaction has occurred yet, the context segment is omitted.
-
-**Shell prompt example** (bash/zsh):
-
-```sh
-# Add to your .bashrc or .zshrc after installing cursor-pulse:
-PS1='$(cursor-pulse status 2>/dev/null)\n'"$PS1"
-```
-
-### Notifications (`notify.sh`)
+### Notifications
 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `CURSOR_PULSE_NOTIFY` | `auto` | Backend: `auto`, `terminal-notifier`, `alerter`, `notify-send`, `osa`, `osc9`, `bell`, `off`. |
-| `CURSOR_PULSE_NOTIFY_ON_STOP` | `1` | Notify when a turn ends (`stop`). |
-| `CURSOR_PULSE_NOTIFY_ON_SESSION_END` | `0` | Notify on `sessionEnd`. |
-| `CURSOR_PULSE_NOTIFY_ON_SHELL` | `0` | Notify after each shell command (`afterShellExecution`). |
-| `CURSOR_PULSE_NOTIFY_TITLE` | folder name | Override the notification title. |
-| `CURSOR_PULSE_NOTIFY_ICON` | _(none)_ | PNG path for `notify-send` / plain `terminal-notifier`. |
+| `CURSOR_PULSE_NOTIFY_ON_STOP` | `1` | Notify when a turn ends. |
+| `CURSOR_PULSE_NOTIFY_ON_SESSION_END` | `0` | Notify on session end. |
+| `CURSOR_PULSE_NOTIFY_ON_SHELL` | `0` | Notify after each shell command. |
+| `CURSOR_PULSE_NOTIFY_SKIP_FOCUSED` | `1` | Skip notification when this terminal tab is focused (macOS). |
+| `CURSOR_PULSE_NOTIFY_TITLE` | folder name | Override notification title. |
+| `CURSOR_PULSE_NOTIFY_ICON` | _(none)_ | PNG path for `notify-send` only. |
 
-`auto` tries, in order: `terminal-notifier` → `alerter` → `notify-send`
-(Linux) → `osascript` (macOS) → terminal bell / OSC-9 escape.
-
-**About the icon (the Cursor logo).** On macOS the installer builds a small
-Cursor-branded notifier — `CursorPulse.app`, a rebranded copy of
-`terminal-notifier` carrying the icon from your local Cursor.app — so alerts
-show the Cursor logo. This needs `terminal-notifier` and `codesign` (Xcode
-Command Line Tools). If it can't be built, it falls back to the plain notifier.
-
-On macOS install `terminal-notifier` for the best experience:
-
-```sh
-brew install terminal-notifier
-```
+On macOS, install `terminal-notifier` for the best experience (`brew install terminal-notifier`). The installer builds `CursorPulse.app` with Cursor's icon so alerts show the Cursor logo — no `-sender` or `-appIcon` hacks that suppress banners.
 
 ## Test
 
-Status line — after a hook has captured state:
-
 ```sh
-echo '{"hook_event_name":"stop","status":"completed","workspace_roots":["'"$PWD"'"],"conversation_id":"test","model":"composer-2","cwd":"'"$PWD"'"}' \
+# Notification + state (stdout must stay empty)
+echo '{"hook_event_name":"stop","status":"completed","workspace_roots":["'"$PWD"'"],"conversation_id":"t","model":"composer-2.5","cwd":"'"$PWD"'"}' \
   | ./hooks/notify.sh
-./statusline.sh </dev/null
+
+# Status line (reads state + cli-config.json)
+./statusline.sh
+
+# With context segment (simulate preCompact capture)
+echo '{"hook_event_name":"preCompact","context_usage_percent":12,"context_tokens":120000,"context_window_size":1000000,"workspace_roots":["'"$PWD"'"],"conversation_id":"t","model":"composer-2.5","cwd":"'"$PWD"'"}' \
+  | ./hooks/notify.sh
+./statusline.sh
 ```
-
-Notification hook:
-
-```sh
-echo '{"hook_event_name":"stop","status":"completed","workspace_roots":["'"$PWD"'"],"conversation_id":"test","model":"test","cwd":"'"$PWD"'"}' \
-  | ./hooks/notify.sh   # title=folder, "Cursor is waiting for your input"
-
-CURSOR_PULSE_NOTIFY_ON_SHELL=1 \
-  echo '{"hook_event_name":"afterShellExecution","command":"echo hello","workspace_roots":["'"$PWD"'"],"conversation_id":"test","model":"test","cwd":"'"$PWD"'"}' \
-  | ./hooks/notify.sh   # title=folder, "ran: echo hello"
-```
-
-Or use the CLI:
-
-```sh
-cursor-pulse test stop
-cursor-pulse test shell
-cursor-pulse status
-cursor-pulse doctor
-```
-
-Real cursor-agent test — paste into a session:
-
-```text
-Run `sleep 8; echo cursor-pulse notification test complete` and then stop.
-```
-
-Switch away while it sleeps. The notification's title is the project folder and
-the message is **Cursor is waiting for your input**.
 
 ## Uninstall
 
 ```sh
 cursor-pulse uninstall
-# or
-~/.cursor/cursor-pulse/uninstall.sh
 ```
-
-Removes `~/.cursor/cursor-pulse/`, strips cursor-pulse hook entries from
-`~/.cursor/hooks.json`, and removes the CLI symlink. Your other hooks are left
-intact.
 
 ## Notes
 
-- Hooks are not supported on Windows shells; the notifier exits quietly there.
-- Hook scripts must keep **stdout clean** — Cursor parses JSON on stdout. Bell
-  and OSC-9 escapes go to `/dev/tty`.
-- Everything degrades gracefully: missing fields, no state file, no `jq`, or no
-  `git` just drop the affected segment rather than erroring.
-- `sessionStart` / `sessionEnd` / `stop` require a recent `cursor-agent`
-  version; older CLIs may only deliver shell events.
-- Status-line design modeled on
-  [agy-statusline](https://codeberg.org/jochenkirstaetter/agy-statusline) and
-  [claude-pulse](https://github.com/martinoyovo/claude-pulse), adapted for
-  Cursor's hook payload and on-demand rendering.
+- Hooks register only on **observe-only events** — never on `before*` permission gates.
+- Hook scripts must keep **stdout clean** — Cursor parses JSON on stdout.
+- Context % comes only from `preCompact`; transcripts are mined for turns/tools only.
+- `sessionStart` / `sessionEnd` / `stop` require a recent `cursor-agent` version.
+- Status-line design modeled on [claude-pulse 0.5.1](https://github.com/martinoyovo/claude-pulse) and [agy-statusline](https://codeberg.org/jochenkirstaetter/agy-statusline).
 
 ## License
 
