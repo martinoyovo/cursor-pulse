@@ -59,6 +59,20 @@ fi
 
 [ -n "$root" ] || root="$cwd"
 
+# ─── AUDIT mode (enabled via CURSOR_PULSE_AUDIT=1 — remove after audit) ───────
+if [ "${CURSOR_PULSE_AUDIT:-0}" = "1" ] && [ -n "$payload" ]; then
+  printf '%s\n' "$payload" >> "$CURSOR_DIR/cursor-pulse/events.log" 2>/dev/null || true
+fi
+
+case "$event" in
+  beforeShellExecution|beforeMCPExecution|beforeReadFile|beforeSubmitPrompt)
+    if [ "${CURSOR_PULSE_AUDIT:-0}" = "1" ]; then
+      # Observe-only: fail-open proceed per Cursor docs (exit ≠0/2, empty stdout).
+      exit 1
+    fi
+    ;;
+esac
+
 # ─── State capture (requires jq) ─────────────────────────────────────────────
 capture_state() {
   [ -n "$conversation_id" ] || return 0
