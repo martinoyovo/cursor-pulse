@@ -18,26 +18,11 @@ if [ -f "$CONFIG" ]; then
   rm -f "$CONFIG.bak"
 fi
 
-if [ -f "$HOOKS_FILE" ] && command -v python3 >/dev/null 2>&1; then
-  HOOKS_FILE=$HOOKS_FILE NOTIFY_DST=$NOTIFY_DST python3 - <<'PY'
-from pathlib import Path
-import json, os
-
-path = Path(os.environ["HOOKS_FILE"])
-notify = os.environ["NOTIFY_DST"]
-try:
-    data = json.loads(path.read_text())
-except Exception:
-    raise SystemExit(0)
-hooks = data.get("hooks")
-if not isinstance(hooks, dict):
-    raise SystemExit(0)
-for event in ("beforeShellExecution", "beforeMCPExecution"):
-    hooks.pop(event, None)
-if not hooks:
-    data.pop("hooks", None)
-path.write_text(json.dumps(data, indent=2) + "\n")
-PY
+# Re-merge hooks from install (keeps permanent before* approval observer).
+SCRIPT_DIR=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd) || SCRIPT_DIR=
+ROOT_DIR=$(dirname "$SCRIPT_DIR")
+if [ -x "$ROOT_DIR/install.sh" ]; then
+  CURSOR_CONFIG_DIR="$CURSOR_DIR" sh "$ROOT_DIR/install.sh" >/dev/null 2>&1 || true
 fi
 
 printf 'cursor-pulse audit mode disabled.\n'

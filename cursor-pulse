@@ -4,7 +4,7 @@
 
 set -u
 
-CURSOR_PULSE_VERSION="0.2.1"
+CURSOR_PULSE_VERSION="0.3.0"
 CURSOR_DIR=${CURSOR_CONFIG_DIR:-"$HOME/.cursor"}
 INSTALL_DIR="$CURSOR_DIR/cursor-pulse"
 RAW_URL=${PULSE_RAW_URL:-"https://raw.githubusercontent.com/martinoyovo/cursor-pulse/main"}

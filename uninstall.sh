@@ -44,7 +44,7 @@ def is_pulse_entry(item):
     cmd = item.get("command", "")
     return isinstance(cmd, str) and ("cursor-pulse" in cmd or cmd == notify)
 
-for event in ("stop", "sessionStart", "sessionEnd", "afterShellExecution", "preCompact"):
+for event in ("stop", "sessionStart", "sessionEnd", "afterShellExecution", "preCompact", "beforeShellExecution", "beforeMCPExecution"):
     entries = hooks.get(event)
     if not isinstance(entries, list):
         continue

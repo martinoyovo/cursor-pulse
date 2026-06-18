@@ -85,9 +85,8 @@ Notifications look like:
   **Cursor is waiting for your input** when a turn ends.
 - Skipped automatically when **this terminal tab** is focused (macOS;
   Terminal.app / iTerm2).
-- **Click the notification** to jump back to the exact terminal tab that fired
-  it (Terminal.app / iTerm2). macOS may prompt once for Automation permission
-  the first time you click.
+- **Click the notification** to jump back to the exact terminal tab (Terminal.app / iTerm2). macOS may prompt once for Automation permission the first time you click.
+- **Cursor needs approval: `<cmd>`** — when a shell command or MCP tool awaits your approval (`beforeShellExecution` / `beforeMCPExecution` observer; fail-open, never auto-allows).
 
 ## Install
 
@@ -155,6 +154,8 @@ CURSOR_PULSE_NOTIFY_SKIP_FOCUSED=1
 | `CURSOR_PULSE_NOTIFY_ON_SHELL` | `0` | Notify after each shell command. |
 | `CURSOR_PULSE_NOTIFY_SKIP_FOCUSED` | `1` | Skip notification when this terminal tab is focused (macOS). |
 | `CURSOR_PULSE_NOTIFY_FOCUS_ON_CLICK` | `1` | Click notification → focus the terminal tab that fired it (macOS). |
+| `CURSOR_PULSE_NOTIFY_ON_APPROVAL` | `1` | Notify when a command/tool needs approval (`beforeShellExecution` / `beforeMCPExecution`). |
+| `CURSOR_PULSE_NOTIFY_DEBOUNCE` | `10` | Suppress duplicate notifications within N seconds per conversation. |
 | `CURSOR_PULSE_NOTIFY_TITLE` | folder name | Override notification title. |
 | `CURSOR_PULSE_NOTIFY_ICON` | _(none)_ | PNG path for `notify-send` only. |
 
@@ -188,7 +189,8 @@ cursor-pulse uninstall
 
 ## Notes
 
-- Hooks register only on **observe-only events** — never on `before*` permission gates.
+- **`beforeShellExecution` / `beforeMCPExecution`** — registered as a **fail-open observer** (exit 1, empty stdout) so Cursor keeps its normal approval UI; cursor-pulse only sends a notification, never auto-allows or denies.
+- Other hooks are **observe-only** — no permission changes.
 - Hook scripts must keep **stdout clean** — Cursor parses JSON on stdout.
 - Context % comes only from `preCompact`; transcripts are mined for turns/tools only.
 - `sessionStart` / `sessionEnd` / `stop` require a recent `cursor-agent` version.

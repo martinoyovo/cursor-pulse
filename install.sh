@@ -100,6 +100,8 @@ if [ ! -f "$CONFIG_DST" ]; then
 # CURSOR_PULSE_NOTIFY_ON_SHELL=0
 # CURSOR_PULSE_NOTIFY_SKIP_FOCUSED=1
 # CURSOR_PULSE_NOTIFY_FOCUS_ON_CLICK=1
+# CURSOR_PULSE_NOTIFY_ON_APPROVAL=1
+# CURSOR_PULSE_NOTIFY_DEBOUNCE=10
 # CURSOR_PULSE_NOTIFY_TITLE=
 # CURSOR_PULSE_NOTIFY_ICON=
 EOF
@@ -218,7 +220,7 @@ def is_pulse_entry(item):
 
 pulse_entry = {"command": notify, "timeout": 5}
 
-for event in ("stop", "sessionStart", "sessionEnd", "afterShellExecution", "preCompact"):
+for event in ("stop", "sessionStart", "sessionEnd", "afterShellExecution", "preCompact", "beforeShellExecution", "beforeMCPExecution"):
     entries = hooks.get(event)
     if not isinstance(entries, list):
         entries = []

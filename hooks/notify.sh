@@ -59,20 +59,6 @@ fi
 
 [ -n "$root" ] || root="$cwd"
 
-# ─── AUDIT mode (enabled via CURSOR_PULSE_AUDIT=1 — remove after audit) ───────
-if [ "${CURSOR_PULSE_AUDIT:-0}" = "1" ] && [ -n "$payload" ]; then
-  printf '%s\n' "$payload" >> "$CURSOR_DIR/cursor-pulse/events.log" 2>/dev/null || true
-fi
-
-case "$event" in
-  beforeShellExecution|beforeMCPExecution|beforeReadFile|beforeSubmitPrompt)
-    if [ "${CURSOR_PULSE_AUDIT:-0}" = "1" ]; then
-      # Observe-only: fail-open proceed per Cursor docs (exit ≠0/2, empty stdout).
-      exit 1
-    fi
-    ;;
-esac
-
 # ─── State capture (requires jq) ─────────────────────────────────────────────
 capture_state() {
   [ -n "$conversation_id" ] || return 0
@@ -149,6 +135,39 @@ capture_state() {
 
 capture_state
 
+# ─── Notification debounce (per conversation_id) ─────────────────────────────
+notify_debounce_skip() {
+  [ -n "$conversation_id" ] || return 1
+  win=${CURSOR_PULSE_NOTIFY_DEBOUNCE:-10}
+  [ "$win" -gt 0 ] 2>/dev/null || return 1
+  sf="$STATE_DIR/${conversation_id}.json"
+  [ -f "$sf" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  last=$(jq -r '.last_notify_epoch // 0' "$sf" 2>/dev/null) || last=0
+  now=$(date +%s 2>/dev/null) || now=0
+  [ "$last" -gt 0 ] 2>/dev/null && [ $((now - last)) -lt "$win" ] 2>/dev/null
+}
+
+notify_debounce_record() {
+  [ -n "$conversation_id" ] || return 0
+  sf="$STATE_DIR/${conversation_id}.json"
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -f "$sf" ] || return 0
+  now=$(date +%s 2>/dev/null) || return 0
+  merged=$(jq --argjson t "$now" '. + {last_notify_epoch: $t}' "$sf" 2>/dev/null) || return 0
+  printf '%s\n' "$merged" > "$sf" 2>/dev/null || true
+}
+
+truncate_cmd() {
+  _c=$1
+  _max=${CURSOR_PULSE_APPROVAL_CMD_MAX:-80}
+  if [ "${#_c}" -gt "$_max" ] 2>/dev/null; then
+    printf '%s...' "$(printf '%.77s' "$_c")"
+  else
+    printf '%s' "$_c"
+  fi
+}
+
 # ─── Title: session title → project folder basename ──────────────────────────
 session_title=
 if [ -n "$transcript_path" ] && [ -f "$transcript_path" ] && command -v jq >/dev/null 2>&1; then
@@ -171,11 +190,38 @@ else
   title="Cursor"
 fi
 
+# ─── Detect the host terminal + this session's TTY (macOS) ───────────────────
+host_bid=""; my_tty=""
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+  host_app=""; pid=$$; n=0
+  while [ "$n" -lt 20 ]; do
+    exe=$(ps -o comm= -p "$pid" 2>/dev/null)
+    case "$exe" in */*.app/Contents/MacOS/*) host_app="${exe%/Contents/MacOS/*}" ;; esac
+    tt=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+    case "$tt" in ttys*) [ -z "$my_tty" ] && my_tty="$tt" ;; esac
+    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    { [ -z "$ppid" ] || [ "$ppid" -le 1 ]; } && break
+    pid=$ppid; n=$(( n + 1 ))
+  done
+  [ -n "$host_app" ] && [ -f "$host_app/Contents/Info.plist" ] \
+    && host_bid=$(defaults read "$host_app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null)
+fi
+
 # ─── Map event → notification message ────────────────────────────────────────
 notify=0
 message=
 
 case "$event" in
+  beforeShellExecution|beforeMCPExecution)
+    [ "${CURSOR_PULSE_NOTIFY_ON_APPROVAL:-1}" = "1" ] || exit 1
+    approval_cmd="$command"
+    if [ -z "$approval_cmd" ] && command -v jq >/dev/null 2>&1; then
+      approval_cmd=$(printf '%s' "$payload" | jq -r '.tool_name // ""' 2>/dev/null)
+    fi
+    [ -n "$approval_cmd" ] || exit 1
+    message="Cursor needs approval: $(truncate_cmd "$approval_cmd")"
+    notify=1
+    ;;
   stop)
     [ "${CURSOR_PULSE_NOTIFY_ON_STOP:-1}" = "1" ] || exit 0
     notify=1
@@ -206,22 +252,12 @@ esac
 
 [ "$notify" = "1" ] || exit 0
 
-# ─── Detect the host terminal + this session's TTY (macOS) ───────────────────
-# Used by BOTH focus-skip below and click-to-focus (-execute) when we notify.
-host_bid=""; my_tty=""
-if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
-  host_app=""; pid=$$; n=0
-  while [ "$n" -lt 20 ]; do
-    exe=$(ps -o comm= -p "$pid" 2>/dev/null)
-    case "$exe" in */*.app/Contents/MacOS/*) host_app="${exe%/Contents/MacOS/*}" ;; esac
-    tt=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
-    case "$tt" in ttys*) [ -z "$my_tty" ] && my_tty="$tt" ;; esac
-    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    { [ -z "$ppid" ] || [ "$ppid" -le 1 ]; } && break
-    pid=$ppid; n=$(( n + 1 ))
-  done
-  [ -n "$host_app" ] && [ -f "$host_app/Contents/Info.plist" ] \
-    && host_bid=$(defaults read "$host_app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null)
+# Debounce duplicate stop (and approval) notifications per conversation.
+if notify_debounce_skip; then
+  case "$event" in
+    beforeShellExecution|beforeMCPExecution) exit 1 ;;
+    *) exit 0 ;;
+  esac
 fi
 
 # ─── Skip when this exact terminal tab is focused (macOS) ────────────────────
@@ -240,9 +276,15 @@ if [ "${CURSOR_PULSE_NOTIFY_SKIP_FOCUSED:-1}" != "0" ] \
         front_tty=$(osascript -e 'tell application "iTerm2" to tell current session of current window to get tty' 2>/dev/null) ;;
     esac
     if [ -n "$front_tty" ] && [ -n "$my_tty" ]; then
-      [ "$front_tty" = "/dev/$my_tty" ] && exit 0
+      case "$event" in
+        beforeShellExecution|beforeMCPExecution) exit 1 ;;
+        *) [ "$front_tty" = "/dev/$my_tty" ] && exit 0 ;;
+      esac
     else
-      exit 0
+      case "$event" in
+        beforeShellExecution|beforeMCPExecution) exit 1 ;;
+        *) exit 0 ;;
+      esac
     fi
   fi
 fi
@@ -325,6 +367,12 @@ case "${CURSOR_PULSE_NOTIFY:-auto}" in
     notify_terminal_notifier || notify_alerter || notify_send \
       || notify_osa || notify_osc9 || notify_bell
     ;;
+esac
+
+notify_debounce_record
+
+case "$event" in
+  beforeShellExecution|beforeMCPExecution) exit 1 ;;
 esac
 
 exit 0
