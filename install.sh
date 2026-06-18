@@ -268,7 +268,7 @@ printf '  %s\n' "$STATUSLINE_DST"
 printf '  %s\n' "$NOTIFY_DST"
 printf '  %s\n\n' "$CLI_DST"
 printf 'Wired into:\n'
-printf '  %s (stop, sessionStart, sessionEnd, afterShellExecution, preCompact)\n\n' "$HOOKS_FILE"
+printf '  %s (stop, sessionStart, sessionEnd, afterShellExecution, preCompact, beforeShellExecution, beforeMCPExecution)\n\n' "$HOOKS_FILE"
 printf 'cursor-agent version: %s\n\n' "$agent_version"
 if [ -n "$CLI_LINK" ]; then
   printf 'CLI available as: %s\n' "$CLI_LINK"
