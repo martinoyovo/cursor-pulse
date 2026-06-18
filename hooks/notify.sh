@@ -192,13 +192,11 @@ esac
 
 [ "$notify" = "1" ] || exit 0
 
-# ─── Skip when this exact terminal tab is focused (macOS) ────────────────────
-# Per-tab precision on Terminal.app / iTerm2. Fail open: any uncertainty → notify.
-if [ "${CURSOR_PULSE_NOTIFY_SKIP_FOCUSED:-1}" != "0" ] \
-  && [ "$(uname -s 2>/dev/null)" = "Darwin" ] \
-  && command -v lsappinfo >/dev/null 2>&1; then
-  host_app=""; my_tty=""
-  pid=$$; n=0
+# ─── Detect the host terminal + this session's TTY (macOS) ───────────────────
+# Used by BOTH focus-skip below and click-to-focus (-execute) when we notify.
+host_bid=""; my_tty=""
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+  host_app=""; pid=$$; n=0
   while [ "$n" -lt 20 ]; do
     exe=$(ps -o comm= -p "$pid" 2>/dev/null)
     case "$exe" in */*.app/Contents/MacOS/*) host_app="${exe%/Contents/MacOS/*}" ;; esac
@@ -208,14 +206,18 @@ if [ "${CURSOR_PULSE_NOTIFY_SKIP_FOCUSED:-1}" != "0" ] \
     { [ -z "$ppid" ] || [ "$ppid" -le 1 ]; } && break
     pid=$ppid; n=$(( n + 1 ))
   done
-
-  host_bid=""
   [ -n "$host_app" ] && [ -f "$host_app/Contents/Info.plist" ] \
     && host_bid=$(defaults read "$host_app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null)
+fi
+
+# ─── Skip when this exact terminal tab is focused (macOS) ────────────────────
+if [ "${CURSOR_PULSE_NOTIFY_SKIP_FOCUSED:-1}" != "0" ] \
+  && [ -n "$host_bid" ] \
+  && command -v lsappinfo >/dev/null 2>&1; then
   front_bid=$(lsappinfo info -only bundleID "$(lsappinfo front 2>/dev/null)" 2>/dev/null \
     | sed 's/.*"\(.*\)".*/\1/' | grep -v '^$' | tail -1)
 
-  if [ -n "$host_bid" ] && [ "$host_bid" = "$front_bid" ]; then
+  if [ "$host_bid" = "$front_bid" ]; then
     front_tty=""
     case "$host_bid" in
       com.apple.Terminal)
@@ -254,8 +256,19 @@ notify_terminal_notifier() {
   else
     return 1
   fi
-  # Bare title + message only — no -group, no -appIcon, no -sender.
-  "$tn" -title "$title" -message "$message" >/dev/null 2>&1
+  # Bare title + message — no -group, no -appIcon, no -sender.
+  set -- -title "$title" -message "$message"
+  # Click-to-focus: -execute runs on click only (after the hook exits); stdout stays clean.
+  if [ "${CURSOR_PULSE_NOTIFY_FOCUS_ON_CLICK:-1}" != "0" ] \
+    && [ -n "${my_tty:-}" ] && [ -n "${SCRIPT_DIR:-}" ] \
+    && [ -x "$SCRIPT_DIR/focus-session.sh" ]; then
+    case "${host_bid:-}" in
+      com.apple.Terminal|com.googlecode.iterm2)
+        set -- "$@" -execute "$SCRIPT_DIR/focus-session.sh $my_tty"
+        ;;
+    esac
+  fi
+  "$tn" "$@" >/dev/null 2>&1
   return 0
 }
 

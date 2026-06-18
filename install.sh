@@ -16,6 +16,8 @@ STATUSLINE_SRC="$SCRIPT_DIR/statusline.sh"
 STATUSLINE_DST="$INSTALL_DIR/statusline.sh"
 NOTIFY_SRC="$SCRIPT_DIR/hooks/notify.sh"
 NOTIFY_DST="$INSTALL_DIR/notify.sh"
+FOCUS_SRC="$SCRIPT_DIR/hooks/focus-session.sh"
+FOCUS_DST="$INSTALL_DIR/focus-session.sh"
 UNINSTALL_SRC="$SCRIPT_DIR/uninstall.sh"
 UNINSTALL_DST="$INSTALL_DIR/uninstall.sh"
 CLI_SRC="$SCRIPT_DIR/cursor-pulse"
@@ -65,9 +67,10 @@ install_file() {
 
 install_file "$STATUSLINE_SRC" "statusline.sh" "$STATUSLINE_DST"
 install_file "$NOTIFY_SRC" "hooks/notify.sh" "$NOTIFY_DST"
+install_file "$FOCUS_SRC" "hooks/focus-session.sh" "$FOCUS_DST"
 install_file "$UNINSTALL_SRC" "uninstall.sh" "$UNINSTALL_DST"
 install_file "$CLI_SRC" "cursor-pulse" "$CLI_DST"
-chmod +x "$STATUSLINE_DST" "$NOTIFY_DST" "$UNINSTALL_DST" "$CLI_DST" || exit 1
+chmod +x "$STATUSLINE_DST" "$NOTIFY_DST" "$FOCUS_DST" "$UNINSTALL_DST" "$CLI_DST" || exit 1
 
 CONFIG_DST="$INSTALL_DIR/config.sh"
 if [ ! -f "$CONFIG_DST" ]; then
@@ -96,6 +99,7 @@ if [ ! -f "$CONFIG_DST" ]; then
 # CURSOR_PULSE_NOTIFY_ON_SESSION_END=0
 # CURSOR_PULSE_NOTIFY_ON_SHELL=0
 # CURSOR_PULSE_NOTIFY_SKIP_FOCUSED=1
+# CURSOR_PULSE_NOTIFY_FOCUS_ON_CLICK=1
 # CURSOR_PULSE_NOTIFY_TITLE=
 # CURSOR_PULSE_NOTIFY_ICON=
 EOF

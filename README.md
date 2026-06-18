@@ -18,16 +18,48 @@ segment). No frameworks.
 ## Important: no live in-TUI status line
 
 Unlike Claude Code, **Cursor's CLI has no customizable status-line slot** as of
-2026. cursor-pulse works around this by:
+2026 — there is nothing to "turn on" inside cursor-agent itself. cursor-pulse
+captures session state via hooks and **`cursor-pulse status` renders a line on
+demand**. If you install it and never wire that command anywhere, it will look
+like nothing is working.
 
-- **Hooks capture session state to disk** as they fire.
-- **`cursor-pulse status` renders the line on demand** from that state, enriched
-  by `~/.cursor/cli-config.json` (model name, approval mode) and agent
-  transcripts (turn/tool counts).
+**You must embed `cursor-pulse status` somewhere that re-runs often** — your
+shell prompt, starship, or tmux status bar. Run `cursor-pulse doctor` anytime
+for copy-paste snippets.
 
-Use it in your shell prompt, tmux status bar, or run it manually. Context usage
-only appears **after Cursor fires a `preCompact` hook** — transcripts on current
-cursor-agent builds do not carry token counts.
+### Make it feel live
+
+**bash** — add to `~/.bashrc`:
+
+```sh
+PROMPT_COMMAND='PS1="$(cursor-pulse status 2>/dev/null)
+$PS1"'
+```
+
+**zsh** — add to `~/.zshrc`:
+
+```sh
+precmd() { CURSOR_PULSE_LINE=$(cursor-pulse status 2>/dev/null); }
+PROMPT='${CURSOR_PULSE_LINE:+$CURSOR_PULSE_LINE$'\n'}% '
+```
+
+**starship** — add to `~/.config/starship.toml`:
+
+```toml
+[custom.cursor-pulse]
+command = "cursor-pulse status"
+format = "[$output]($style) "
+shell = ["bash", "zsh"]
+```
+
+**tmux** — add to `~/.tmux.conf`:
+
+```sh
+set -g status-right "#(cursor-pulse status 2>/dev/null)"
+```
+
+Context usage only appears **after Cursor fires a `preCompact` hook** —
+transcripts on current cursor-agent builds do not carry token counts.
 
 ## Preview
 
@@ -53,6 +85,9 @@ Notifications look like:
   **Cursor is waiting for your input** when a turn ends.
 - Skipped automatically when **this terminal tab** is focused (macOS;
   Terminal.app / iTerm2).
+- **Click the notification** to jump back to the exact terminal tab that fired
+  it (Terminal.app / iTerm2). macOS may prompt once for Automation permission
+  the first time you click.
 
 ## Install
 
@@ -80,11 +115,7 @@ cursor-pulse update     # re-install the latest version from GitHub
 cursor-pulse uninstall  # remove cursor-pulse
 ```
 
-**Shell prompt example:**
-
-```sh
-PS1='$(cursor-pulse status 2>/dev/null)\n'"$PS1"
-```
+Run `cursor-pulse doctor` for install checks **and** the prompt/tmux snippets above.
 
 ## Configuration
 
@@ -123,6 +154,7 @@ CURSOR_PULSE_NOTIFY_SKIP_FOCUSED=1
 | `CURSOR_PULSE_NOTIFY_ON_SESSION_END` | `0` | Notify on session end. |
 | `CURSOR_PULSE_NOTIFY_ON_SHELL` | `0` | Notify after each shell command. |
 | `CURSOR_PULSE_NOTIFY_SKIP_FOCUSED` | `1` | Skip notification when this terminal tab is focused (macOS). |
+| `CURSOR_PULSE_NOTIFY_FOCUS_ON_CLICK` | `1` | Click notification → focus the terminal tab that fired it (macOS). |
 | `CURSOR_PULSE_NOTIFY_TITLE` | folder name | Override notification title. |
 | `CURSOR_PULSE_NOTIFY_ICON` | _(none)_ | PNG path for `notify-send` only. |
 
@@ -135,8 +167,12 @@ On macOS, install `terminal-notifier` for the best experience (`brew install ter
 echo '{"hook_event_name":"stop","status":"completed","workspace_roots":["'"$PWD"'"],"conversation_id":"t","model":"composer-2.5","cwd":"'"$PWD"'"}' \
   | ./hooks/notify.sh
 
+# Stdin override (forward-compat test):
+echo '{"root":"/tmp/zzz","status":"error","context_pct":77,"context_tokens":1000,"context_window":2000}' \
+  | NO_COLOR=1 ./statusline.sh
+
 # Status line (reads state + cli-config.json)
-./statusline.sh
+./statusline.sh </dev/null
 
 # With context segment (simulate preCompact capture)
 echo '{"hook_event_name":"preCompact","context_usage_percent":12,"context_tokens":120000,"context_window_size":1000000,"workspace_roots":["'"$PWD"'"],"conversation_id":"t","model":"composer-2.5","cwd":"'"$PWD"'"}' \

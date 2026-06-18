@@ -10,12 +10,8 @@
 
 set -uo pipefail
 
-# Stdin: only read when JSON is piped in (not a TTY, and data is waiting).
-# Avoids blocking on `./statusline.sh` when stdin is an open but empty pipe.
 INPUT_JSON=""
-if ! [ -t 0 ] && read -t 0 -N 0 2>/dev/null; then
-  INPUT_JSON=$(cat 2>/dev/null) || INPUT_JSON=""
-fi
+[ -t 0 ] || INPUT_JSON=$(cat 2>/dev/null) || INPUT_JSON=""
 
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 [ -n "${SELF_DIR:-}" ] && [ -f "$SELF_DIR/config.sh" ] && . "$SELF_DIR/config.sh"
@@ -166,14 +162,27 @@ if [ -z "$ROOT" ] && [ -d "$STATE_DIR" ]; then
   pwd_real=$(CDPATH= cd -- "$PWD" 2>/dev/null && pwd) || pwd_real="$PWD"
 
   if command -v jq >/dev/null 2>&1; then
+    best_epoch=0
     for f in "$STATE_DIR"/*.json; do
       [ -f "$f" ] || continue
       r=$(jq -r '.root // ""' "$f" 2>/dev/null)
       [ -n "$r" ] || continue
       r_real=$(CDPATH= cd -- "$r" 2>/dev/null && pwd) || r_real="$r"
-      if [ "$r_real" = "$pwd_real" ]; then
+      [ "$r_real" = "$pwd_real" ] || continue
+
+      epoch=0
+      updated_at=$(jq -r '.updated_at // ""' "$f" 2>/dev/null)
+      if [ -n "$updated_at" ] && [ "$updated_at" != "null" ]; then
+        epoch=$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$updated_at" +%s 2>/dev/null) \
+          || epoch=$(date -u -d "$updated_at" +%s 2>/dev/null) \
+          || epoch=0
+      fi
+      if [ "$epoch" -le 0 ] 2>/dev/null; then
+        epoch=$(stat -f %m "$f" 2>/dev/null) || epoch=$(stat -c %Y "$f" 2>/dev/null) || epoch=0
+      fi
+      if [ "$epoch" -ge "$best_epoch" ] 2>/dev/null; then
+        best_epoch=$epoch
         STATE_FILE=$f
-        break
       fi
     done
   fi
